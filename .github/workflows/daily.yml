@@ -1,0 +1,32 @@
+name: Send RBI Circulars Summaries
+
+# Run at 02:30 UTC every day → 08:00 IST
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      # 1) Get your code
+      - uses: actions/checkout@v3
+
+      # 2) Set up Python 3.x
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.x"
+
+      # 3) Install dependencies
+      - name: Install dependencies
+        run: pip install requests feedparser beautifulsoup4 huggingface_hub
+
+      # 4) Run the bot
+      - name: Run RBI Bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          HUGGINGFACE_TOKEN:  ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: python rbi_bot.py
