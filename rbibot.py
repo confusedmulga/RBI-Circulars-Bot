@@ -6,17 +6,16 @@ from bs4 import BeautifulSoup
 from transformers import pipeline, logging as hf_logging
 import textwrap
 
-# ── CONFIG ───────────────────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8013011299:AAF1WS7GqOMVwzmbNyvqqBYai5g2CRAV8AU")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "-1002526785455")
+# CONFIG
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "ADD TOKEN HERE")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "ADD TELEGRAM GROUP ID HERE")
 
 RSS_FEED           = "https://www.rbi.org.in/pressreleases_rss.xml"
 HEADERS            = {"User-Agent": "Mozilla/5.0"}
 LAST_TITLE_FILE    = "last_title.txt"
 
-# ── SET UP LOCAL SUMMARIZER ───────────────────────────────────────────
+# LOCAL SUMMARIZER HEREEEEEE
 hf_logging.set_verbosity_error()
-# T5-small can handle up to 512 tokens (~2000 characters) per chunk
 summarizer = pipeline(
     "summarization",
     model="t5-small",
