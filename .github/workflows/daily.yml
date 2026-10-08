@@ -2,22 +2,57 @@ name: RBI Circular Bot
 
 on:
   schedule:
-    - cron: '30 3 * * *'  # 9:00 AM IST (3:30 UTC)
+    # Hourly at :31 UTC (hh:01 IST). RBI's feeds only show the latest 10 items, so
+    # they are checked often; the digest itself goes out once a day, on the first
+    # run at or after 9:00 IST (see DIGEST_HOUR_IST in rbibot.py).
+    - cron: '31 * * * *'
   workflow_dispatch:
+    inputs:
+      send_now:
+        description: 'Send everything queued now instead of waiting for the 9 AM digest'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Runs share state.json, so never let two overlap
+concurrency:
+  group: rbi-bot
+  cancel-in-progress: false
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
+          python-version: '3.13'
+          cache: pip
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Run RBI Bot
         run: python rbibot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_NOW: ${{ inputs.send_now }}
+
+      # Commit state.json even if the bot failed, so items already sent are not resent
+      - name: Save state
+        if: always()
+        run: |
+          [ -f state.json ] || exit 0
+          git add state.json
+          git diff --cached --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update bot state [skip ci]"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
