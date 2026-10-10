@@ -6,7 +6,7 @@ Posts a daily digest of new Reserve Bank of India notifications (circulars, dire
 
 - A GitHub Actions workflow runs `rbibot.py` every hour.
 - Each run reads RBI's two RSS feeds, [notifications](https://www.rbi.org.in/notifications_rss.xml) and [press releases](https://www.rbi.org.in/pressreleases_rss.xml), and queues every item it has not seen before. Each feed only shows its latest 10 items, which is why it checks hourly rather than once a day.
-- The first run at or after 9:00 IST sends everything queued as one digest (split into several messages only when it exceeds Telegram's 4096-character limit):
+- The first run at or after 9:00 IST sends everything queued as one digest (split into messages of up to about 3900 characters, under Telegram's 4096 limit):
   - **Notifications** and **Press releases**: title linked to the RBI page, the effective date when the circular states one, and a short extract of its opening paragraphs in a collapsible quote.
   - **Market operations**: routine press releases (auctions, money market operations, reserve money and similar, set by `ROUTINE_TITLE_PATTERNS` in `rbibot.py`) as bare links.
 - Summaries are extracted from the text RBI includes in the feed. No ML model or external API is involved.
@@ -16,8 +16,9 @@ Posts a daily digest of new Reserve Bank of India notifications (circulars, dire
 ## Setup
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), add it to your channel or group (as an admin for channels) and note the chat ID.
-2. In the repository's **Settings → Secrets and variables → Actions**, add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-3. The workflow needs to push `state.json`: under **Settings → Actions → General → Workflow permissions**, make sure workflows are allowed read and write access, or that the workflow's own `permissions: contents: write` is not blocked by an organisation policy.
+2. In the repository's **Settings → Secrets and variables → Actions**, add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Never put the token in the code; if it ever lands in a commit, revoke it with `/revoke` in @BotFather and store the new one.
+3. The workflow pushes `state.json` to the default branch as `github-actions[bot]`, so that branch must accept direct pushes from it (no rule requiring pull requests or signed commits).
+4. Scheduled workflows only run from the default branch. The Actions tab should show a run every hour; if none appear, enable Actions under **Settings → Actions → General** and click **Enable workflow** on the workflow's page.
 
 To send the queue immediately, run the workflow manually from the **Actions** tab with **send_now** ticked.
 

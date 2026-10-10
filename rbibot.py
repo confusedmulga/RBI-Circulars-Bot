@@ -56,6 +56,9 @@ ROUTINE_TITLE_PATTERNS = [
     r"\bswitch\b.*\bsecurities\b",
     r"statistical supplement",
     r"^sale \((?:re-)?issue\)",
+    r"foreign exchange turnover",
+    r"statement of position",
+    r"\b(?:OMO|open market operations?)\b.*\b(?:cut-?offs?|results?)\b",
 ]
 ROUTINE_RE = re.compile("|".join(ROUTINE_TITLE_PATTERNS), re.IGNORECASE)
 
@@ -142,20 +145,25 @@ NUMBERING_RE      = re.compile(r"^\d+(?:\.\d+)*\.?\s+(?=[A-Z(])")
 # Operative paragraphs of Directions ("…hereby issues the Directions hereinafter specified",
 # "shall be called…", "shall come into effect…"): kept out of the summary
 BOILERPLATE_RE    = re.compile(
-    r"hereinafter specified|shall be called|come into (?:effect|force)"
+    r"hereinafter specified|shall be called|come into (?:effect|force)|shall be effective from"
     r"|are (?:hereby )?amended as (?:provided|given) below",
     re.IGNORECASE,
 )
+PROVISO_RE        = re.compile(r"provided (?:further |also )?that\b", re.IGNORECASE)
 TRAILER_RE        = re.compile(r"^(?:yours (?:faithfully|sincerely)|press release\s*:|encl)", re.IGNORECASE)
 SIGNATURE_RE      = re.compile(r"^\([^()]{2,60}\)$")
+# "shall come into effect from April 1, 2027", "will take effect from …", "shall come into force
+# with immediate effect", "shall be effective from …". A dated phrase stops at the first year.
 EFFECTIVE_RE      = re.compile(
-    r"(?:shall|will)\s+come\s+into\s+(?:effect|force)\s+"
-    r"((?:from|on|with effect from|with immediate effect)\b[^.;]{0,60}?)\s*(?:[.;]|$)",
+    r"(?:shall|will)\s+(?:come\s+into\s+(?:effect|force)|be\s+effective|take\s+effect)\s+"
+    r"(with immediate effect|with effect immediately|immediately"
+    r"|(?:from|on|with effect from)\s(?:[^.;]{0,80}?\b\d{4}(?:-\d{2,4})?\b|[^.;,]{1,80}))",
     re.IGNORECASE,
 )
+DOTTED_ABBREV_RE  = re.compile(r"(?:[a-z]{1,5}\.)+[a-z]{1,5}")   # A.P., S.O., CO.DOS.SED., F.No.
 ABBREVIATIONS = {
     "no", "nos", "rs", "ltd", "co", "pvt", "viz", "i.e", "e.g", "sr", "dr", "mr", "ms",
-    "mrs", "shri", "smt", "govt", "dept", "sl", "dt", "st", "vs", "para", "paras", "ref",
+    "mrs", "prof", "shri", "smt", "govt", "dept", "sl", "dt", "st", "vs", "para", "paras", "ref",
     "cf", "approx", "inc", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
     "oct", "nov", "dec",
 }
@@ -172,9 +180,10 @@ def body_paragraphs(description: str, title: str) -> list:
     for br in soup.find_all("br"):
         br.replace_with(" ")
     # The whole description is wrapped in one layout table; any table inside it is data.
+    # It is replaced by a marker so a summary ending "as under:" stops there.
     for table in soup.find_all("table"):
-        if not table.decomposed and table.find_parent("table"):
-            table.decompose()
+        if table.find_parent("table"):
+            table.replace_with(soup.new_tag("p", attrs={"data-table": "1"}))
 
     blocks = [b for b in soup.find_all(["p", "li"]) if not (b.name == "li" and b.find("p"))]
     if not blocks:
@@ -182,13 +191,24 @@ def body_paragraphs(description: str, title: str) -> list:
         return [(text, False)] if text else []
 
     norm_title = clean_space(title).lower()
+    alnum_title = re.sub(r"[^a-z0-9]", "", norm_title)
     paragraphs = []
-    for block in blocks:
+    for n, block in enumerate(blocks):
+        if block.get("data-table"):
+            if paragraphs:
+                paragraphs.append(("", False))
+            continue
         text = clean_space(block.get_text())
         if not text:
             continue
+        # Everything before a notification's own title is header (addressee, salutation…)
+        if n < 10 and alnum_title and re.sub(r"[^a-z0-9]", "", text.lower()) == alnum_title:
+            paragraphs = []
+            continue
         align = (block.get("align") or "").lower()
-        is_heading = "head" in (block.get("class") or [])
+        head = block.find(class_="head")
+        is_heading = ("head" in (block.get("class") or [])
+                      or (head is not None and clean_space(head.get_text()) == text))
         if not paragraphs:
             # Header: reference numbers, date, addressee, salutation, title
             if (align in ("right", "center") or is_heading or len(text) < 40
@@ -211,7 +231,8 @@ def is_abbreviation(text_before: str) -> bool:
     if not words:
         return False
     word = words[-1].lstrip("(\"'“‘").lower()
-    return word in ABBREVIATIONS or (len(word) == 1 and word.isalpha())
+    return (word in ABBREVIATIONS or (len(word) == 1 and word.isalpha())
+            or DOTTED_ABBREV_RE.fullmatch(word) is not None)
 
 
 def shorten(text: str, limit: int) -> str:
@@ -235,7 +256,11 @@ def summarize(description: str, title: str) -> tuple:
     paragraphs = body_paragraphs(description, title)
     summary, prev_in_list = "", False
     for text, in_list in paragraphs:
-        if BOILERPLATE_RE.search(text):
+        if not text:   # a data table was here
+            if summary.endswith(":"):
+                break
+            continue
+        if BOILERPLATE_RE.search(text) or (not summary and PROVISO_RE.match(text)):
             continue
         sep = "; " if in_list and prev_in_list else " "
         summary = f"{summary}{sep}{text}" if summary else text
@@ -247,7 +272,7 @@ def summarize(description: str, title: str) -> tuple:
     effective = ""
     m = EFFECTIVE_RE.search(" ".join(text for text, _ in paragraphs))
     if m:
-        phrase = re.sub(r"^on\s+", "", clean_space(m.group(1)), flags=re.IGNORECASE)
+        phrase = re.sub(r"^on\s+(?=\d|[A-Z][a-z]+ \d)", "", clean_space(m.group(1)), flags=re.IGNORECASE)
         effective = "Effective immediately" if "immediate" in phrase.lower() else f"Effective {phrase}"
     return summary, effective
 
@@ -322,7 +347,7 @@ def render_routine(item: dict) -> str:
 def build_blocks(pending: list, notes: list) -> list:
     """
     Digest body as blocks that are never split across messages. Each block is
-    (separator before it, html, pending item keys, notes).
+    (separator before it, html, pending item keys, notes, heading to use if it opens a message).
     """
     def order(item):
         num = int(item["id"]) if item["id"].isdigit() else 0
@@ -339,18 +364,17 @@ def build_blocks(pending: list, notes: list) -> list:
     for heading, items in sections:
         for n, item in enumerate(sorted(items, key=order), 1):
             text = render_item(n, item)
+            cont = f"<b>{esc(heading)} (contd.)</b>\n"
             if n == 1:
-                text = f"<b>{esc(heading)}</b>\n{text}"
-            blocks.append(("\n\n", text, [(item["feed"], item["id"])], []))
+                text, cont = f"<b>{esc(heading)}</b>\n{text}", ""
+            blocks.append(("\n\n", text, [(item["feed"], item["id"])], [], cont))
     for n, item in enumerate(sorted(routine, key=order)):
-        text = render_routine(item)
-        sep = "\n"
+        text, sep, cont = render_routine(item), "\n", "<b>Market operations (contd.)</b>\n"
         if n == 0:
-            text = f"<b>Market operations</b>\n{text}"
-            sep = "\n\n"
-        blocks.append((sep, text, [(item["feed"], item["id"])], []))
+            text, sep, cont = f"<b>Market operations</b>\n{text}", "\n\n", ""
+        blocks.append((sep, text, [(item["feed"], item["id"])], [], cont))
     for note in notes:
-        blocks.append(("\n\n", f"<i>{esc(note)}</i>", [], [note]))
+        blocks.append(("\n\n", f"<i>{esc(note)}</i>", [], [note], ""))
     return blocks
 
 
@@ -358,15 +382,15 @@ def build_messages(pending: list, notes: list, now: datetime) -> list:
     """Split the digest into messages under MESSAGE_LIMIT. Returns [(html, item keys, notes)]."""
     count = len(pending)
     title = f"RBI updates · {now.strftime('%d %b %Y')} · {count} new"
-    header_room = len(title) + 30   # "<b>…</b> (2/3)\n\n"
+    header_room = len(title) + 80   # "<b>…</b> (2/3)\n\n" and a "(contd.)" section heading
 
     chunks = []
     current, keys, chunk_notes = "", [], []
-    for sep, text, item_keys, block_notes in build_blocks(pending, notes):
+    for sep, text, item_keys, block_notes, cont in build_blocks(pending, notes):
         if current and len(current) + len(sep) + len(text) + header_room > MESSAGE_LIMIT:
             chunks.append((current, keys, chunk_notes))
             current, keys, chunk_notes = "", [], []
-        current = f"{current}{sep}{text}" if current else text
+        current = f"{current}{sep}{text}" if current else cont + text
         keys += item_keys
         chunk_notes += block_notes
     if current:
